@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Dark App Icon Background -->
+  <rect width="1024" height="1024" rx="225" fill="#09090b" />
+  
+  <!-- Laptop Base & Screen (Blue) -->
+  <rect x="250" y="350" width="400" height="260" rx="20" fill="none" stroke="#3b82f6" stroke-width="40" />
+  <path d="M200 650 h500 v30 a30 30 0 0 1 -30 30 H230 a30 30 0 0 1 -30 -30 z" fill="#3b82f6" />
+  
+  <!-- Smartphone (Emerald Green) overlapping the laptop -->
+  <rect x="580" y="420" width="200" height="320" rx="30" fill="#09090b" stroke="#10b981" stroke-width="35" />
+  <line x1="640" y1="460" x2="720" y2="460" stroke="#10b981" stroke-width="12" stroke-linecap="round" />
+  
+  <!-- Wireless / Sync Connection Waves (Orange) -->
+  <path d="M 450 480 q 40 -40 80 0" fill="none" stroke="#f59e0b" stroke-width="25" stroke-linecap="round" />
+  <path d="M 420 420 q 70 -70 140 0" fill="none" stroke="#f59e0b" stroke-width="25" stroke-linecap="round" />
+</svg>
