@@ -13,6 +13,7 @@ import { FolderPlus, Upload, ChevronRight, Home, MoreVertical, ArrowLeft } from 
 import { api } from '@/lib/api';
 import type { FileItem } from '@/lib/types';
 import { formatBytes, formatDate, parentPath } from '@/lib/storage';
+import { transferManager, TransferItem } from '@/lib/transferManager';
 import { Colors, Radius, Spacing, Typography } from '@/lib/theme';
 import { getFileIcon } from '@/components/FileIcons';
 import { LoadingView, ErrorView, EmptyView } from '@/components/States';
@@ -25,6 +26,12 @@ export default function FilesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live transfers subscription
+  const [transfers, setTransfers] = useState<TransferItem[]>([]);
+
+  // State to track exactly which row's menu is open
+  const [activeMenuPath, setActiveMenuPath] = useState<string | null>(null);
 
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [folderName, setFolderName] = useState('');
@@ -40,6 +47,7 @@ export default function FilesScreen() {
   const loadDir = useCallback(async (dirPath: string) => {
     try {
       setError(null);
+      setActiveMenuPath(null); // Close menus on navigation
       if (!loading && !refreshing) setLoading(true);
       const res = await api.listDirectory(dirPath);
       setItems(res.items);
@@ -54,14 +62,21 @@ export default function FilesScreen() {
 
   useEffect(() => {
     loadDir('');
+
+    const unsubscribe = transferManager.subscribe((activeList) => {
+      setTransfers(activeList);
+    });
+    return () => unsubscribe();
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
+    setActiveMenuPath(null);
     loadDir(currentPath);
   };
 
   const navigateTo = (item: FileItem) => {
+    setActiveMenuPath(null);
     if (item.type === 'folder') {
       loadDir(item.path);
     } else if (item.type === 'text') {
@@ -73,9 +88,14 @@ export default function FilesScreen() {
     }
   };
 
-  const goUp = () => {
-    const parent = parentPath(currentPath);
-    loadDir(parent);
+  const handleDownload = (item: FileItem) => {
+    setActiveMenuPath(null);
+    transferManager.startDownload(item.path, item.name);
+  };
+
+  const handleCancelDownload = (transferId: string) => {
+    setActiveMenuPath(null);
+    transferManager.cancelTransfer(transferId);
   };
 
   const handleCreateFolder = async () => {
@@ -132,6 +152,7 @@ export default function FilesScreen() {
   };
 
   const openRename = (item: FileItem) => {
+    setActiveMenuPath(null);
     setMenuItem(item);
     setRenameValue(item.name);
     setRenameError(null);
@@ -139,11 +160,13 @@ export default function FilesScreen() {
   };
 
   const openDelete = (item: FileItem) => {
+    setActiveMenuPath(null);
     setMenuItem(item);
     setDeleteModal(true);
   };
 
   const handleUpload = () => {
+    setActiveMenuPath(null);
     router.push({ pathname: '/upload', params: { path: currentPath } });
   };
 
@@ -212,18 +235,27 @@ export default function FilesScreen() {
           />
         }
         ItemSeparatorComponent={() => <View style={styles.separator} />}
-        renderItem={({ item }) => (
-          <FileRow
-            item={item}
-            onPress={() => navigateTo(item)}
-            onMenu={() => {
-              setMenuItem(item);
-              openRename(item);
-            }}
-            onRename={() => openRename(item)}
-            onDelete={() => openDelete(item)}
-          />
-        )}
+        renderItem={({ item }) => {
+          const activeDownload = transfers.find(
+            (t) => t.type === 'download' && t.name === item.name && (t.status === 'active' || t.status === 'paused')
+          );
+
+          return (
+            <FileRow
+              item={item}
+              downloadProgress={activeDownload ? activeDownload.progress : undefined}
+              activeDownloadId={activeDownload ? activeDownload.id : undefined}
+              isMenuOpen={activeMenuPath === item.path}
+              onToggleMenu={() => setActiveMenuPath(activeMenuPath === item.path ? null : item.path)}
+              onCloseMenu={() => setActiveMenuPath(null)}
+              onPress={() => navigateTo(item)}
+              onDownload={() => handleDownload(item)}
+              onCancelDownload={() => activeDownload && handleCancelDownload(activeDownload.id)}
+              onRename={() => openRename(item)}
+              onDelete={() => openDelete(item)}
+            />
+          );
+        }}
       />
 
       {/* Action buttons */}
@@ -288,47 +320,91 @@ export default function FilesScreen() {
 
 function FileRow({
   item,
+  downloadProgress,
+  activeDownloadId,
+  isMenuOpen,
+  onToggleMenu,
+  onCloseMenu,
   onPress,
-  onMenu,
+  onDownload,
+  onCancelDownload,
   onRename,
   onDelete,
 }: {
   item: FileItem;
+  downloadProgress?: number;
+  activeDownloadId?: string;
+  isMenuOpen: boolean;
+  onToggleMenu: () => void;
+  onCloseMenu: () => void;
   onPress: () => void;
-  onMenu: () => void;
+  onDownload: () => void;
+  onCancelDownload: () => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
-  const [showMenu, setShowMenu] = useState(false);
+  const isDownloading = downloadProgress !== undefined;
 
   return (
-    <View style={styles.row}>
-      <Pressable style={styles.rowContent} onPress={onPress}>
-        <View style={styles.iconWrap}>
-          {getFileIcon(item, 24)}
-        </View>
-        <View style={styles.rowInfo}>
-          <Text style={styles.rowName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.rowMeta}>
-            {item.type === 'folder' ? 'Folder' : formatBytes(item.size)}
-            {item.modified ? '  ·  ' + formatDate(item.modified) : ''}
-          </Text>
-        </View>
-      </Pressable>
-      <Pressable
-        style={styles.menuBtn}
-        onPress={() => setShowMenu(!showMenu)}
-      >
-        <MoreVertical size={20} color={Colors.neutral[400]} strokeWidth={2} />
-      </Pressable>
-      {showMenu && (
+    // Elevation and zIndex ensure the open menu floats above everything else in the FlatList
+    <View style={[styles.rowContainer, isMenuOpen && { zIndex: 100, elevation: 100 }]}>
+      
+      {/* Background Layer with hidden overflow for the progress bar */}
+      <View style={styles.rowBackground}>
+        {isDownloading && (
+          <View
+            style={[
+              styles.rowProgressBar,
+              { width: `${Math.round(downloadProgress * 100)}%` },
+            ]}
+          />
+        )}
+      </View>
+
+      <View style={styles.rowMain}>
+        <Pressable style={styles.rowContent} onPress={onPress}>
+          <View style={styles.iconWrap}>
+            {getFileIcon(item, 24)}
+          </View>
+          <View style={styles.rowInfo}>
+            <Text style={styles.rowName} numberOfLines={1}>{item.name}</Text>
+            <Text style={[styles.rowMeta, isDownloading && styles.rowMetaDownloading]}>
+              {isDownloading
+                ? `Downloading... ${Math.round(downloadProgress * 100)}%`
+                : item.type === 'folder'
+                ? 'Folder'
+                : `${formatBytes(item.size)}${item.modified ? '  ·  ' + formatDate(item.modified) : ''}`}
+            </Text>
+          </View>
+        </Pressable>
+
+        <Pressable style={styles.menuBtn} onPress={onToggleMenu}>
+          <MoreVertical size={20} color={Colors.neutral[400]} strokeWidth={2} />
+        </Pressable>
+      </View>
+
+      {/* Menu overlay - Only shown if this specific row is active */}
+      {isMenuOpen && (
         <>
-          <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)} />
+          {/* An invisible backdrop that captures taps outside the menu to close it */}
+          <Pressable style={styles.menuBackdrop} onPress={onCloseMenu} />
+          
           <View style={styles.menu}>
-            <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); onRename(); }}>
+            {item.type !== 'folder' && (
+              activeDownloadId ? (
+                <Pressable style={styles.menuItem} onPress={onCancelDownload}>
+                  <Text style={[styles.menuItemText, styles.menuItemCancel]}>Cancel Download</Text>
+                </Pressable>
+              ) : (
+                <Pressable style={styles.menuItem} onPress={onDownload}>
+                  <Text style={[styles.menuItemText, styles.menuItemDownload]}>Download</Text>
+                </Pressable>
+              )
+            )}
+            <Pressable style={styles.menuItem} onPress={onRename}>
               <Text style={styles.menuItemText}>Rename</Text>
             </Pressable>
-            <Pressable style={[styles.menuItem, styles.menuItemDanger]} onPress={() => { setShowMenu(false); onDelete(); }}>
+            <Pressable style={[styles.menuItem, styles.menuItemDanger]} onPress={onDelete}>
               <Text style={[styles.menuItemText, styles.menuItemTextDanger]}>Delete</Text>
             </Pressable>
           </View>
@@ -375,8 +451,8 @@ const styles = StyleSheet.create({
   },
   crumbHome: {
     padding: 4,
-  borderRadius: Radius.sm,
-  marginRight: 2,
+    borderRadius: Radius.sm,
+    marginRight: 2,
   },
   crumbItem: {
     flexDirection: 'row',
@@ -403,13 +479,30 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.neutral[100],
     marginLeft: 56,
   },
-  row: {
+  
+  /* Row Container Restructured */
+  rowContainer: {
+    position: 'relative',
+    borderRadius: Radius.md,
+    // NO overflow: hidden here, so the menu can float outside safely
+  },
+  rowBackground: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: Radius.md,
+    overflow: 'hidden', // Overflow hidden ONLY for the green progress bar
+  },
+  rowProgressBar: {
+    position: 'absolute',
+    top: 0, bottom: 0, left: 0,
+    backgroundColor: '#dcfce7',
+  },
+  rowMain: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 8,
-    borderRadius: Radius.md,
   },
+  
   rowContent: {
     flex: 1,
     flexDirection: 'row',
@@ -437,19 +530,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.neutral[400],
   },
+  rowMetaDownloading: {
+    color: '#16a34a',
+    fontWeight: '600',
+  },
   menuBtn: {
     padding: 8,
     borderRadius: Radius.sm,
   },
+  
+  /* Menu Dropdown Fixes */
   menuBackdrop: {
     position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+    top: -1000, bottom: -1000, left: -1000, right: -1000,
     zIndex: 10,
   },
   menu: {
     position: 'absolute',
     right: 8,
-    top: 44,
+    top: 48,
     backgroundColor: Colors.neutral[0],
     borderRadius: Radius.md,
     paddingVertical: 4,
@@ -470,15 +569,23 @@ const styles = StyleSheet.create({
     color: Colors.neutral[700],
     fontWeight: '500',
   },
+  menuItemDownload: {
+    color: Colors.primary[600],
+    fontWeight: '600',
+  },
+  menuItemCancel: {
+    color: Colors.warning[600],
+    fontWeight: '600',
+  },
   menuItemDanger: {},
   menuItemTextDanger: {
     color: Colors.error[600],
   },
+  
+  /* Footer Actions */
   actionBar: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    bottom: 0, left: 0, right: 0,
     flexDirection: 'row',
     gap: 12,
     padding: Spacing.md,

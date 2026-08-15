@@ -60,7 +60,7 @@ export default function SettingsScreen() {
     <View style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Settings</Text>
-        <Text style={styles.headerSubtitle}>Connect to your laptop file server</Text>
+        <Text style={styles.headerSubtitle}>Connect to your file server</Text>
       </View>
 
       <View style={styles.content}>
@@ -73,7 +73,7 @@ export default function SettingsScreen() {
             <View style={styles.cardHeaderText}>
               <Text style={styles.cardTitle}>Server Address</Text>
               <Text style={styles.cardDesc}>
-                Enter the URL shown by the laptop server script
+                Enter the URL shown by the server script
               </Text>
             </View>
           </View>

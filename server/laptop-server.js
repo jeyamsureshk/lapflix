@@ -1,25 +1,6 @@
 #!/usr/bin/env node
 /**
  * Laptop File Server - Companion to the mobile app.
- *
- * Run on your laptop:
- *   node laptop-server.js [path-to-share] [port]
- *
- * Defaults: shares the current directory on port 7321.
- *
- * The mobile app connects to http://<your-laptop-ip>:7321
- *
- * Endpoints:
- *   GET    /api/health
- *   GET    /api/list?path=...
- *   GET    /api/file?path=...        (download / raw content)
- *   GET    /api/text?path=...       (text file content as JSON)
- *   PUT    /api/text?path=...        (save text file content)
- *   POST   /api/folder               (create folder)
- *   POST   /api/upload              (upload file, multipart)
- *   POST   /api/rename              (rename / move)
- *   DELETE /api/delete?path=...      (delete file or folder)
- *   GET    /api/stream?path=...      (video / large file streaming with Range support)
  */
 
 const http = require('http');
@@ -64,52 +45,6 @@ function send(res, status, data, headers = {}) {
 function sendRaw(res, status, data, contentType = 'application/octet-stream', headers = {}) {
   res.writeHead(status, { 'Content-Type': contentType, ...CORS, ...headers });
   res.end(data);
-}
-
-function parseMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const boundary = (req.headers['content-type'] || '').match(/boundary=(.+)/);
-    if (!boundary) return reject(new Error('No boundary'));
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      try {
-        const buf = Buffer.concat(chunks);
-        const sep = Buffer.from('--' + boundary[1]);
-        const parts = [];
-        let start = 0;
-        while (true) {
-          const idx = buf.indexOf(sep, start);
-          if (idx === -1) break;
-          if (start > 0) parts.push(buf.slice(start, idx));
-          start = idx + sep.length;
-          if (buf[start] === 0x2d && buf[start + 1] === 0x2d) break; // --
-          start += 2; // skip \r\n
-        }
-        const fields = {};
-        let fileData = null;
-        let fileName = null;
-        for (const part of parts) {
-          const headerEnd = part.indexOf('\r\n\r\n');
-          if (headerEnd === -1) continue;
-          const header = part.slice(0, headerEnd).toString();
-          const data = part.slice(headerEnd + 4, part.length - 2);
-          const nameMatch = header.match(/name="([^"]+)"/);
-          const fnameMatch = header.match(/filename="([^"]+)"/);
-          if (fnameMatch) {
-            fileName = fnameMatch[1];
-            fileData = data;
-          } else if (nameMatch) {
-            fields[nameMatch[1]] = data.toString();
-          }
-        }
-        resolve({ fields, fileName, fileData });
-      } catch (e) {
-        reject(e);
-      }
-    });
-    req.on('error', reject);
-  });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -239,17 +174,33 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Upload file (multipart)
+  // Upload file (Direct Binary Stream)
   if (url.pathname === '/api/upload' && req.method === 'POST') {
     try {
-      const { fields, fileName, fileData } = await parseMultipart(req);
-      const rel = fields.path || '';
+      const rel = req.headers['x-file-path'] || '';
+      const fileName = req.headers['x-file-name'];
+
+      if (!fileName) {
+        return send(res, 400, { error: 'Missing X-File-Name header' });
+      }
+
       const full = safeJoin(SHARE_ROOT, rel ? `${rel}/${fileName}` : fileName);
       if (!full) return send(res, 403, { error: 'Access denied' });
+
       await fsp.mkdir(path.dirname(full), { recursive: true });
-      await fsp.writeFile(full, fileData);
+
+      const writeStream = fs.createWriteStream(full);
+      req.pipe(writeStream);
+
+      await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+
+      console.log(`✅ Successfully received: ${fileName}`);
       return send(res, 200, { ok: true, name: fileName });
     } catch (e) {
+      console.error("❌ Upload Error:", e);
       return send(res, 500, { error: e.message });
     }
   }
@@ -332,11 +283,11 @@ server.listen(PORT, '0.0.0.0', () => {
     }
   }
   console.log('\n  ┌─────────────────────────────────────────────┐');
-  console.log('  │  Laptop File Server                        │');
+  console.log('  │  Laptop File Server                         │');
   console.log('  │  Sharing: ' + SHARE_ROOT);
   console.log('  │  Port: ' + PORT);
   console.log('  │                                             │');
-  console.log('  │  Connect from your phone to one of:        │');
+  console.log('  │  Connect from your phone to one of:         │');
   ips.forEach(ip => console.log('  │    http://' + ip + ':' + PORT));
   console.log('  └─────────────────────────────────────────────┘\n');
 });

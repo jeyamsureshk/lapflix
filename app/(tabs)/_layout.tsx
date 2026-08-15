@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Folder, Image, Video, Settings } from 'lucide-react-native';
+import { Folder, Image, Video, Settings, ArrowLeftRight,ArrowUpDown } from 'lucide-react-native';
 import { Colors } from '@/lib/theme';
 
 export default function TabLayout() {
@@ -44,6 +44,14 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Video size={size} color={color} strokeWidth={2} />,
         }}
       />
+    <Tabs.Screen
+        name="transfer"
+        options={{
+          title: 'Transfer',
+          tabBarIcon: ({ size, color }) => <ArrowUpDown size={size} color={color} strokeWidth={2} />,
+        }}
+      />
+
       <Tabs.Screen
         name="settings"
         options={{
